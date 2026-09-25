@@ -8,6 +8,7 @@ guarantee. Run from the repo root:  python3 -m unittest discover tests
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -193,6 +194,27 @@ class TestStopGate(TmpProject):
         self._state(surfaced_keys=["p1", "p2"], applied_keys=["p1"])
         out = json.loads(self.run_gate({"session_id": "session-1"}).stdout)
         self.assertIn("dismiss_surfaced.py session-1 p2", out["reason"])
+
+    def test_a_shell_edit_is_reconciled_and_the_gate_still_emits_json(self):
+        """A shell edit is invisible to the edit hook, so the reconciler has to queue it.
+
+        Its notice must not reach stdout: a Stop hook's stdout has to be pure JSON, or
+        the block decision is ignored and the session ends with unaudited changes.
+        """
+        hooks = os.path.join(self.cwd, ".claude", "hooks")
+        os.makedirs(hooks)
+        for name in ("drift_queue.py", "reconcile_drift_queue.py"):
+            shutil.copy(os.path.join(HOOKS, name), hooks)
+        app = os.path.join(self.cwd, "app.py")
+        with open(app, "w") as fh:
+            fh.write("x = 1\n")
+        git = ["git", "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false"]
+        for args in (["init", "-q"], ["add", "-A"], ["commit", "-qm", "init"]):
+            subprocess.run(git + args, cwd=self.cwd, check=True)
+        with open(app, "w") as fh:
+            fh.write("x = 2\n")
+        out = json.loads(self.run_gate().stdout)
+        self.assertEqual(out["decision"], "block")
 
 
 class TestCaptureMiner(unittest.TestCase):

@@ -123,6 +123,9 @@ place ".claude/settings.json" 0
 place ".claude/hooks/session_recall.py" 0
 place ".claude/hooks/drift_queue.py" 0
 place ".claude/hooks/drift_stop_gate.sh" 0
+# The stop gate runs this before counting the queue, and hides any failure with
+# `|| true`, so a project that got the gate without it would silently miss shell edits.
+place ".claude/hooks/reconcile_drift_queue.py" 0
 place ".claude/hooks/capture_candidates.py" 0
 place ".claude/hooks/pattern_apply_tracker.py" 0
 # Ships alongside the stop gate on purpose: the gate's block message names this

@@ -28,7 +28,11 @@ else
   # gate would pass a session with unaudited changes. The reconciler asks git instead.
   # Fails open (not a git repo, git missing, any error -> queues nothing), so a
   # failure here degrades to the old behaviour rather than trapping the session.
-  python3 .claude/hooks/reconcile_drift_queue.py 2>/dev/null || true
+  # stdout must stay pure JSON or the client cannot parse the block decision.
+  # >&2 keeps the reconciler's notice AND any traceback visible; >/dev/null 2>&1
+  # would silence both, and a hook that hides its own crashes is what caused
+  # three multi-day outages here.
+  python3 .claude/hooks/reconcile_drift_queue.py >&2 || true
   COUNT=$(ls .prd-drift-queue 2>/dev/null | wc -l | tr -d ' ')
 fi
 case "$COUNT" in ''|*[!0-9]*) exit 0;; esac

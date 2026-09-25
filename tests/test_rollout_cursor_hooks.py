@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -182,6 +183,23 @@ class TestRolloutCursorHooks(unittest.TestCase):
 
         status, changes = self.mod.install(self.project, apply=True, stamp="test2")
         self.assertEqual((status, changes), ("unchanged", []))
+
+    def test_every_hook_the_stop_gate_names_is_shipped(self):
+        """The gate runs its helper scripts with `|| true`, so a missing one fails silently.
+
+        reconcile_drift_queue.py was added to templates and to the gate but to neither
+        installer, so projects set up by them never received it.
+        """
+        gate = (REPO / "templates/.claude/hooks/drift_stop_gate.sh").read_text(encoding="utf-8")
+        bootstrap = (REPO / "scripts/bootstrap_project.sh").read_text(encoding="utf-8")
+        named = set(re.findall(r"\.claude/hooks/(\w+\.py)", gate))
+        self.assertIn("reconcile_drift_queue.py", named)
+        for name in sorted(named):
+            self.assertIn(name, self.mod.CLAUDE_HOOK_FILES)
+            self.assertTrue(f'place ".claude/hooks/{name}"' in bootstrap,
+                            f"bootstrap_project.sh never places {name}")
+        # The reconciler imports classify/enqueue, which older drift_queue.py copies lack.
+        self.assertIn("drift_queue.py", self.mod.CLAUDE_HOOK_FILES)
 
 
 if __name__ == "__main__":

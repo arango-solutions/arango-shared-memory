@@ -27,13 +27,18 @@ CURSOR_HOOK_FILES = (
     "shared_memory_apply_tracker.py",
     "shared_memory_stop_gate.py",
 )
-# dismiss_surfaced.py must roll out with drift_stop_gate.sh: the gate's block message
-# names it, so shipping the gate alone would point projects at a missing script.
+# dismiss_surfaced.py and reconcile_drift_queue.py must roll out with drift_stop_gate.sh:
+# the gate's block message names the first, and the gate runs the second with `|| true`,
+# so shipping the gate alone either points projects at a missing script or silently
+# skips shell edits. drift_queue.py rolls out too, because the reconciler imports from it.
 CLAUDE_HOOK_FILES = (
     "session_recall.py",
+    "drift_queue.py",
     "drift_stop_gate.sh",
     "pattern_apply_tracker.py",
     "dismiss_surfaced.py",
+    "reconcile_drift_queue.py",
+    "capture_candidates.py",
 )
 # Skills were never synced by this tool, only placed once by bootstrap_project.sh (which
 # skips existing files). The result was silent permanent drift: as of 2026-08-25, 29 of 32
