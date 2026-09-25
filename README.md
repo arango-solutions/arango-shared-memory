@@ -1,6 +1,6 @@
 # arango-shared-memory
 
-[![CI](https://github.com/ArthurKeen/arango-shared-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/ArthurKeen/arango-shared-memory/actions/workflows/ci.yml)
+[![CI](https://github.com/arango-solutions/arango-shared-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/arango-solutions/arango-shared-memory/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 
@@ -78,8 +78,9 @@ Full design, shared-deployment guidance, and troubleshooting live in **[setup.md
 Prereqs: Python 3.11+ & Poetry, Claude Code and/or Cursor, your own OpenAI API key, and the shared-cluster
 credentials (get these from your team lead — never from a repo). Then:
 ```bash
-# 1. Clone both repos under ~/code (see table above); install the server:
-cd ~/code/arango-solutions-mcp-server && poetry install
+# 1. Clone both repos under ~/code (see table above); install the server (no virtualenv active):
+cd ~/code/arango-solutions-mcp-server
+poetry config virtualenvs.in-project true --local && poetry install
 
 # 2. Register the MCP server (id `arangodb-memory-mcp`) in ~/.claude.json AND ~/.cursor/mcp.json,
 #    pointing ARANGO_HOSTS at the shared cluster, with your creds + your own OpenAI key.
@@ -103,7 +104,8 @@ backend, not join an existing one. Full walkthrough: **[ONBOARDING.md](ONBOARDIN
 Only when creating a fresh shared memory (a new cluster, or a private local one for solo/offline use).
 
 ```bash
-cd ~/code/arango-solutions-mcp-server && poetry install
+cd ~/code/arango-solutions-mcp-server   # no virtualenv active
+poetry config virtualenvs.in-project true --local && poetry install
 
 # Local Docker instance — NOTE the --experimental-vector-index flag (required for hybrid/graph):
 docker run -d --name shared-memory-arangodb --restart unless-stopped \

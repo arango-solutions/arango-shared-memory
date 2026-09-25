@@ -95,10 +95,14 @@ Confirm: `curl -s -u root:openSesame http://localhost:8539/_api/version`
 
 ## STEP 1 — Install the server
 ```bash
-cd ~/code/arango-solutions-mcp-server && poetry install
+# Run with no virtualenv active, or Poetry installs into that one instead of creating .venv.
+cd ~/code/arango-solutions-mcp-server
+poetry config virtualenvs.in-project true --local   # put the venv at ./.venv, which STEP 3 launches
+poetry install
 ```
-This creates the server's virtualenv (has `python-arango`, `rdflib`, etc.). All scripts below run via
-`poetry run python …` from this directory.
+This creates the server's virtualenv at `.venv/` (has `python-arango`, etc.). The `poetry config` line
+asks for a project-local venv; without it Poetry uses its own cache, and the `.venv/bin/python` in
+STEP 3 does not exist. All scripts below run via `poetry run python …` from this directory.
 
 ## STEP 2 (admin / new backend only) — Create the schema (run once)
 > **Teammates joining the existing shared memory SKIP this** — the schema is already there, and
@@ -122,7 +126,7 @@ Register under the id **`arangodb-memory-mcp`** in *both* Claude Code (`~/.claud
 ```json
 {
   "command": "bash",
-  "args": ["-c", "cd /Users/<you>/code/arango-solutions-mcp-server && exec .venv/bin/arangodb-mcp"],
+  "args": ["-c", "cd /Users/<you>/code/arango-solutions-mcp-server && exec .venv/bin/python main.py"],
   "cwd": "/Users/<you>/code/arango-solutions-mcp-server",
   "env": {
     "ARANGO_HOSTS": "https://<shared-cluster-host>:8529",
@@ -130,8 +134,6 @@ Register under the id **`arangodb-memory-mcp`** in *both* Claude Code (`~/.claud
     "ARANGO_ROOT_PASSWORD": "<your password — DO NOT COMMIT>",
     "ARANGO_DEFAULT_DB_NAME": "memory",
     "ARANGO_VERIFY_SSL": "true",
-    "MCP_PROFILE": "developer",
-    "MCP_TOOLSETS": "graph,search",
     "OPENAI_API_KEY": "sk-...your own key...",
     "EMBEDDING_MODEL": "text-embedding-3-small"
   }
@@ -140,19 +142,17 @@ Register under the id **`arangodb-memory-mcp`** in *both* Claude Code (`~/.claud
 - Values above are for **joining the shared cluster** (the common case). For a **new local backend**
   instead, use `"ARANGO_HOSTS": "http://localhost:8539"`, `root` / `openSesame`, and omit `ARANGO_VERIFY_SSL`.
 - `OPENAI_API_KEY` enables hybrid/graph. Omit it to run keyword-only. **Never commit this file / key.**
-- `arangodb-mcp` is the server's console command (created by `poetry install` in STEP 1). The `bash -c`
-  wrapper avoids depending on `poetry` being on the launcher's PATH. If you installed the package
-  system-wide, `"command": "arangodb-mcp"` with no `args` also works.
-- **`MCP_PROFILE` is required for shared memory.** It defaults to `readonly`, whose tool surface
-  excludes the whole `memory` category (`pattern-search`, `save-pattern`, `pattern-applied`,
-  `save-drift-alert`, `embed-*`) *and* all writes. `developer` = read + write + memory +
-  transaction, with no admin rights — the right level for using shared memory. `MCP_TOOLSETS`
-  additively adds `graph` (traversals) and `search` (vector/hybrid). Profiles: `readonly` |
-  `developer` | `operator` (+backup) | `admin` (everything).
-- **After a `git pull` of the server, re-check these two lines.** Configs that launch `python
-  main.py` predate the `src/arangodb_mcp` packaging change; that file is gone, so the server
-  starts nothing. Both this and a `readonly` profile fail the same way: because the skills fail
-  open, the only symptom is the memory tools quietly disappearing.
+- This launch line matches the server's `main` branch: Poetry with `package-mode = false` and
+  `main.py` at the repo root. Its `pyproject.toml` declares an `arangodb-mcp` script, but with
+  `package-mode = false` Poetry never installs the project, so that command is never created.
+  Launch `main.py` with the venv's Python instead. The `bash -c` wrapper avoids depending on
+  `poetry` being on the launcher's PATH.
+- Every tool category, `memory` included, is registered on `main`; there are no profiles or
+  toolsets to set. What you can write is governed by your database user's permissions.
+- **After a `git pull` of the server, re-check the launch line.** If the server moves to a
+  packaged layout (a `src/` package with `[project.scripts]`, as on `phase1/platform-spine`), the
+  entry point changes. A wrong launch line leaves the memory tools unavailable, and because the
+  skills fail open that is easy to miss: check the client's MCP logs.
 - Reload Cursor / restart Claude Code so the tools load — a running client keeps its dead connection.
 
 ## STEP 4 — Verify
@@ -301,7 +301,7 @@ separate local `memory` DB and switch to the shared one via env — two database
 | Session end blocked by the drift gate | `.prd-drift-queue/` non-empty | run `/prd-sync` (clears the queue); it blocks at most once per stop; per-repo bypass: `touch .no-drift-gate` |
 | Insert rejected: "schema validation failed" | document violates the collection's JSON schema (missing project_id, bad enum value) | fix the document — the schema is the guard, not the bug; rules live in `setup_schema.py` |
 | `prd_patches`/`sync_observations` missing | database predates the migration round | `poetry run python .../scripts/migrate.py` |
-| MCP server won't start / memory tools silently missing | config launches the removed `main.py` (pre-`src/arangodb_mcp` packaging), or `poetry` isn't on the launcher PATH | point the launcher at `.venv/bin/arangodb-mcp` (see STEP 3), then fully restart the client — a running one keeps its dead connection |
+| MCP server won't start / memory tools silently missing | config launches `.venv/bin/arangodb-mcp`, which `main` never creates; or the venv is in Poetry's cache, so `.venv/` is missing | launch `.venv/bin/python main.py` (see STEP 3). If `.venv/` is missing, run `poetry env info --path` in the server dir; if it points outside the repo, `poetry env remove --all` and redo STEP 1. Then fully restart the client — a running one keeps its dead connection |
 | `ERR 1521 collection not known to traversal` | cluster traversal missing `WITH` | add `WITH <all reachable vertex collections>` (needed on cluster, hidden on single-server) |
 | `ERR 1579 access after data-modification` | one AQL reads a collection after modifying it | split into separate statements |
 | Saving a pattern fails: `Expecting type Array` | inserting into a vector-indexed collection without the embedding | use `save-pattern` (embeds then inserts); don't insert-then-embed |
