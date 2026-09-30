@@ -217,6 +217,135 @@ class TestStopGate(TmpProject):
         self.assertEqual(out["decision"], "block")
 
 
+class TestReconcileAgainstAuditedTree(TmpProject):
+    """The stamp records the audited WORKING TREE, so audited-but-uncommitted work is quiet.
+
+    Regression for the loop found in argos on 2026-09-29: the stamp held HEAD while the
+    audit read the working tree, so every /prd-sync ended with its own audited files
+    re-queued and the gate firing again on zero change — indefinitely, since re-running
+    the sync re-stamped the same HEAD.
+    """
+
+    GIT = ["git", "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false"]
+
+    def setUp(self):
+        super().setUp()
+        hooks = os.path.join(self.cwd, ".claude", "hooks")
+        os.makedirs(hooks)
+        for name in ("drift_queue.py", "reconcile_drift_queue.py"):
+            shutil.copy(os.path.join(HOOKS, name), hooks)
+        self._write("app.py", "x = 1\n")
+        self.git("init", "-q")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "init")
+
+    def git(self, *args):
+        return subprocess.run(self.GIT + list(args), cwd=self.cwd, check=True,
+                              capture_output=True, text=True).stdout
+
+    def _write(self, rel, text):
+        path = os.path.join(self.cwd, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as fh:
+            fh.write(text)
+
+    def mark_synced(self):
+        proc = subprocess.run(
+            [sys.executable, os.path.join(".claude", "hooks", "reconcile_drift_queue.py"),
+             "--mark-synced"], cwd=self.cwd, capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return proc
+
+    def run_gate(self):
+        return subprocess.run(["bash", STOP_GATE], input="{}", capture_output=True,
+                              text=True, cwd=self.cwd)
+
+    def assertQuiet(self):
+        proc = self.run_gate()
+        self.assertEqual(proc.stdout.strip(), "", f"gate blocked; stderr: {proc.stderr}")
+
+    def assertBlocks(self):
+        out = json.loads(self.run_gate().stdout)
+        self.assertEqual(out["decision"], "block")
+
+    def test_audited_uncommitted_work_does_not_requeue(self):
+        # The argos shape: a modified tracked file, new untracked source, and a PRD edit,
+        # none of it committed when the audit ran.
+        self._write("app.py", "x = 2\n")
+        self._write(os.path.join("src", "new_mod.py"), "y = 1\n")
+        self._write(os.path.join("docs", "PRD.md"), "# PRD\n")
+        self.assertBlocks()          # unaudited: must block
+        self.mark_synced()
+        self.assertQuiet()           # audited and unchanged: must not loop
+        self.assertQuiet()           # ...and stays quiet on the next Stop, too
+
+    def test_edit_after_the_audit_is_still_caught(self):
+        self._write("app.py", "x = 2\n")
+        self.mark_synced()
+        self._write("app.py", "x = 3\n")
+        self.assertBlocks()
+
+    def test_new_untracked_file_after_the_audit_is_still_caught(self):
+        self.mark_synced()
+        self._write(os.path.join("src", "later.py"), "z = 1\n")
+        self.assertBlocks()
+
+    def test_committing_audited_work_stays_quiet(self):
+        self._write("app.py", "x = 2\n")
+        self.mark_synced()
+        self.git("add", "-A")
+        self.git("commit", "-qm", "audited")
+        self.assertQuiet()
+
+    def test_reverting_to_the_audited_content_is_not_drift(self):
+        self._write("app.py", "x = 2\n")
+        self.mark_synced()
+        self._write("app.py", "x = 3\n")
+        self._write("app.py", "x = 2\n")
+        self.assertQuiet()
+
+    def test_legacy_commit_stamp_keeps_the_old_behaviour(self):
+        # Repos stamped before this change hold a commit SHA. It must still resolve
+        # (to that commit's tree) rather than be treated as absent.
+        head = self.git("rev-parse", "HEAD").strip()
+        qdir = os.path.join(self.cwd, ".prd-drift-queue")
+        os.makedirs(qdir, exist_ok=True)
+        with open(os.path.join(qdir, ".last-sync"), "w") as fh:
+            fh.write(head + "\n")
+        self._write("app.py", "x = 2\n")
+        self.assertBlocks()
+
+    def test_stamp_is_a_tree_object(self):
+        self._write("app.py", "x = 2\n")
+        self.mark_synced()
+        with open(os.path.join(self.cwd, ".prd-drift-queue", ".last-sync")) as fh:
+            ref = fh.read().split()[0]
+        self.assertEqual(self.git("cat-file", "-t", ref).strip(), "tree")
+
+    def test_mark_synced_clears_markers_only_and_leaves_the_real_index_alone(self):
+        self._write("app.py", "x = 2\n")
+        self._write(os.path.join("src", "new_mod.py"), "y = 1\n")
+        qdir = os.path.join(self.cwd, ".prd-drift-queue")
+        os.makedirs(os.path.join(qdir, "keepdir"))
+        for name in ("1_app.py", "prd_2_PRD.md"):
+            open(os.path.join(qdir, name), "w").close()
+        before = self.git("status", "--porcelain", "--untracked-files=all")
+        self.mark_synced()
+        self.assertEqual(sorted(os.listdir(qdir)), [".last-sync", "keepdir"])
+        # The snapshot runs in a scratch index: nothing gets staged, and untracked
+        # files stay untracked.
+        after = self.git("status", "--porcelain", "--untracked-files=all")
+
+        def comparable(status):
+            # Running the reconciler imports drift_queue, so Python writes a __pycache__
+            # beside it — an import side effect, not an index change.
+            return sorted(l for l in status.splitlines()
+                          if ".prd-drift-queue" not in l and "__pycache__" not in l)
+        self.assertEqual(comparable(after), comparable(before))
+        staged = subprocess.run(self.GIT + ["diff", "--cached", "--quiet"], cwd=self.cwd)
+        self.assertEqual(staged.returncode, 0, "real index was modified")
+
+
 class TestCaptureMiner(unittest.TestCase):
     """The Stop-hook miner should detect resolved failures for Bash AND MCP tools."""
 
