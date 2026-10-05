@@ -343,18 +343,31 @@ Do not implement without user confirmation.
 every accepted patch has been written to disk:
 
 ```bash
-rm -f .prd-drift-queue/*
-mkdir -p .prd-drift-queue   # `rm -f dir/*` leaves the dir, but a fresh clone has none
-git rev-parse HEAD > .prd-drift-queue/.last-sync 2>/dev/null || true
+python3 .claude/hooks/reconcile_drift_queue.py --mark-synced
 ```
 
-The stamp records **which commit this audit covered**, so the Stop-time reconciler
-(`.claude/hooks/reconcile_drift_queue.py`) can queue markers for anything committed *after*
-it. Without the stamp the reconciler sees only uncommitted work, and changes that were
-committed and then audited-past would slip through. `.last-sync` is a **dotfile
-deliberately**: `rm -f .prd-drift-queue/*` does not match it and `ls` does not count it, so
-it survives the clear above and never inflates the gate's count. Write it *after* the `rm`,
-never before.
+One command clears the queue markers and then stamps the audit point, so the order cannot
+be got wrong. It prints what it cleared and what it stamped; a non-zero exit means it
+failed, and the gate will keep firing. Do not fall back to `rm` — see below.
+
+The stamp records **the working tree this audit read** — a git *tree* of every tracked,
+modified and untracked file (`.gitignore` honoured), built in a scratch index so the real
+index is never touched. The Stop-time reconciler compares the working tree against it by
+*content*: committing audited work stays quiet, editing a file after the audit is caught,
+and reverting an edit to its audited content is correctly not drift. `.last-sync` is a
+**dotfile deliberately**, so `ls` never counts it and the clear step skips it.
+
+> **Why a tree, not `git rev-parse HEAD`** (the stamp before 2026-09-30). The audit reads
+> the working tree, but a commit stamp recorded HEAD. Any audited work still uncommitted
+> therefore always differed from the stamp: the gate re-queued it the moment the sync
+> finished, and re-running the sync re-stamped the same HEAD — an endless loop on zero
+> change, hitting every repo that audits before committing (the normal order). Legacy
+> commit stamps are still read, and resolve to that commit's tree.
+>
+> **Why not `rm -f .prd-drift-queue/*`.** A glob whose base the shell cannot resolve
+> statically — for instance after a `cd` — is exactly what agent command-safety checks
+> refuse, which left this step unrunnable in some environments. `--mark-synced` deletes
+> only regular, non-dot files directly inside the queue directory.
 
 If the sync is abandoned before this point the queue survives **by design** — the audit did
 not finish, so the gate should still fire. Do not clear it early to silence the gate.
@@ -363,8 +376,8 @@ not finish, so the gate should still fire. Do not clear it early to silence the 
 > `tool_input.file_path`. A Bash call carries none, so a `cat > f <<EOF` heredoc, `sed -i`,
 > a generated script, or an edit made outside the session queues **nothing** — and this gate
 > only counts markers. Agents are actively steered toward the shell by tool-preference
-> settings, so that is the common path, not an edge case. The reconciler asks
-> `git status` / `git diff` what actually changed instead of trying to parse shell.
+> settings, so that is the common path, not an edge case. The reconciler asks git what
+> actually changed since the audit instead of trying to parse shell.
 
 ---
 
